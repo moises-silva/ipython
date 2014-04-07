@@ -435,7 +435,7 @@ class TerminalInteractiveShell(InteractiveShell):
     def stdout_write(self, data):
         ostream = self.stdout_original
 
-        if len(data) == 1:
+        if data[len(data)-1] != '\n' or ord(data[0]) == 27:
             os.write(ostream.fileno(), data)
             ostream.flush()
             return
@@ -601,6 +601,8 @@ class TerminalInteractiveShell(InteractiveShell):
                     self.run_cell(source_raw, store_history=True)
                     hlen_b4_cell = \
                         self._replace_rlhist_multiline(source_raw, hlen_b4_cell)
+                    if self.background_stdout:
+                        self.write(line)
 
         # Turn off the exit flag, so the mainloop can be restarted if desired
         self.exit_now = False
