@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# vim: tabstop=4 softtabstop=4 shiftwidth=4 textwidth=80 smarttab expandtab
 """Subclass of InteractiveShell for terminal based frontends."""
 
 #-----------------------------------------------------------------------------
@@ -18,6 +19,10 @@ from __future__ import print_function
 import bdb
 import os
 import sys
+import thread
+import struct, fcntl, termios, readline
+import pty
+import select
 
 # We need to use nested to support python 2.6, once we move to >=2.7, we can
 # use the with keyword's new builtin support for nested managers
@@ -297,6 +302,12 @@ class TerminalInteractiveShell(InteractiveShell):
     # executed via paste magics functions
     using_paste_magics = CBool(False)
 
+    background_stdout = CBool(False, config=True,
+        help="""
+        Set to have IPython manage all stdout in the background
+        and avoid applications writting to stdout mess with readline input""",
+    )
+
     # In the terminal, GUI control is done via PyOS_InputHook
     @staticmethod
     def enable_gui(gui=None, app=None):
@@ -421,6 +432,35 @@ class TerminalInteractiveShell(InteractiveShell):
     #-------------------------------------------------------------------------
     # Mainloop and code execution logic
     #-------------------------------------------------------------------------
+    def stdout_write(self, data):
+        ostream = self.stdout_original
+
+        if len(data) == 1:
+            os.write(ostream.fileno(), data)
+            ostream.flush()
+            return
+
+        (rows,cols) = struct.unpack('hh', fcntl.ioctl(ostream, termios.TIOCGWINSZ, '1234'))
+
+        text_len = len(readline.get_line_buffer()) + 2
+
+        # ANSI escape sequences (All VT100 except ESC[0G)
+        ostream.write('\x1b[2K')                         # Clear current line
+        ostream.write('\x1b[1A\x1b[2K'*(text_len/cols))  # Move cursor up and clear line
+        ostream.write('\x1b[0G')                         # Move to start of line
+        ostream.write(data)
+        prompt = self.separate_in + self.prompt_manager.render('in')
+        ostream.write(prompt)
+        ostream.write(readline.get_line_buffer())
+        ostream.flush()
+
+    def stdout_loop(self):
+        while True:
+            r = select.select([self.stdout_master], [], [], 1.0)
+            if len(r[0]) <= 0:
+                continue
+            data = os.read(self.stdout_master, 1024)
+            self.stdout_write(data)
 
     def mainloop(self, display_banner=None):
         """Start the mainloop.
@@ -428,6 +468,12 @@ class TerminalInteractiveShell(InteractiveShell):
         If an optional banner argument is given, it will override the
         internally created default banner.
         """
+
+        if self.background_stdout:
+            self.stdout_master, self.stdout_slave = pty.openpty()
+            self.stdout_original = os.fdopen(os.dup(sys.stdout.fileno()), 'w')
+            thread.start_new_thread(self.stdout_loop, ())
+            os.dup2(self.stdout_slave, sys.stdout.fileno())
 
         with nested(self.builtin_trap, self.display_trap):
 
