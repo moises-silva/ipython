@@ -461,7 +461,6 @@ class TerminalInteractiveShell(InteractiveShell):
         ostream.flush()
 
     def stdout_loop(self):
-        self.last_stdout_line = ''
         while True:
             r = select.select([self.stdout_master], [], [], 1.0)
             if len(r[0]) <= 0:
