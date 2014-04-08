@@ -435,31 +435,41 @@ class TerminalInteractiveShell(InteractiveShell):
     def stdout_write(self, data):
         ostream = self.stdout_original
 
-        if data[len(data)-1] != '\n' or ord(data[0]) == 27:
-            os.write(ostream.fileno(), data)
+        if data[len(data)-1] != '\n' or '\x1b' in data:
+            ostream.write(data)
             ostream.flush()
             return
 
+        prompt = self.separate_in + self.prompt_manager.render('in')
+        readline_buf = readline.get_line_buffer()
         (rows,cols) = struct.unpack('hh', fcntl.ioctl(ostream, termios.TIOCGWINSZ, '1234'))
 
-        text_len = len(readline.get_line_buffer()) + 2
+        text_len = len(readline_buf) + 2
 
-        # ANSI escape sequences (All VT100 except ESC[0G)
-        ostream.write('\x1b[2K')                         # Clear current line
-        ostream.write('\x1b[1A\x1b[2K'*(text_len/cols))  # Move cursor up and clear line
-        ostream.write('\x1b[0G')                         # Move to start of line
+        if readline_buf:
+            # ANSI escape sequences (All VT100 except ESC[0G)
+            ostream.write('\x1b[2K')                         # Clear current line
+            ostream.write('\x1b[1A\x1b[2K'*(text_len/cols))  # Move cursor up and clear line
+            ostream.write('\x1b[0G')                         # Move to start of line
+
         ostream.write(data)
-        prompt = self.separate_in + self.prompt_manager.render('in')
-        ostream.write(prompt)
-        ostream.write(readline.get_line_buffer())
+        #if not data.startswith('In [') and data != '\n' and data != '\r\n':
+        if readline_buf:
+            ostream.write(prompt)
+            ostream.write(readline_buf)
+
         ostream.flush()
 
     def stdout_loop(self):
+        self.last_stdout_line = ''
         while True:
             r = select.select([self.stdout_master], [], [], 1.0)
             if len(r[0]) <= 0:
                 continue
             data = os.read(self.stdout_master, 1024)
+            self.stdout_log.write(repr(data))
+            self.stdout_log.write('\n')
+            self.stdout_log.flush()
             self.stdout_write(data)
 
     def mainloop(self, display_banner=None):
@@ -470,6 +480,7 @@ class TerminalInteractiveShell(InteractiveShell):
         """
 
         if self.background_stdout:
+            self.stdout_log = open('/tmp/ipython-stdout.log', 'w+')
             self.stdout_master, self.stdout_slave = pty.openpty()
             self.stdout_original = os.fdopen(os.dup(sys.stdout.fileno()), 'w')
             thread.start_new_thread(self.stdout_loop, ())
@@ -601,8 +612,6 @@ class TerminalInteractiveShell(InteractiveShell):
                     self.run_cell(source_raw, store_history=True)
                     hlen_b4_cell = \
                         self._replace_rlhist_multiline(source_raw, hlen_b4_cell)
-                    if self.background_stdout:
-                        self.write(line)
 
         # Turn off the exit flag, so the mainloop can be restarted if desired
         self.exit_now = False
